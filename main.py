@@ -262,8 +262,8 @@ def generate_audio(text, voice_id='Joanna', speed=1.0):
         polly = boto3.client(
             "polly",
             region_name="us-east-1",
-           aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
-           aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"]
+            aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"]
 
         )
         response = polly.synthesize_speech(Text=text, OutputFormat="mp3", VoiceId=voice_id)
