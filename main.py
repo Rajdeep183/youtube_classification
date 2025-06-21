@@ -22,7 +22,7 @@ import uuid
 
 # Load .env variables
 load_dotenv()
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -205,32 +205,68 @@ def extract_video_id(url):
 
 # Helper: Get transcript with comprehensive error handling and debugging
 def get_transcript(video_id):
+    """Fetch transcript with comprehensive language support and detailed debugging"""
     try:
+        # First, list all available transcripts
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
-        # First, try English or auto-generated English
-        try:
-            transcript = transcript_list.find_transcript(["en"])
-            data = transcript.fetch()
-            text = " ".join(entry['text'] for entry in data)
-            return text, "en"
-        except:
-            pass
-
-        # Fallback: get first available transcript (any language)
-        for transcript in transcript_list:
+        available_transcripts = list(transcript_list)
+        
+        if not available_transcripts:
+            logger.error("No transcripts available for this video")
+            return None, None
+        
+        # Log available transcripts for debugging
+        logger.info(f"Available transcripts: {[(t.language_code, t.language) for t in available_transcripts]}")
+        
+        # Try to get transcript in preferred order
+        languages_to_try = ["en", "en-US", "en-GB", "en-IN", "hi", "fr", "de", "es", "it", "pt", "ja", "ko", "zh"]
+        
+        for lang in languages_to_try:
             try:
-                data = transcript.fetch()
-                text = " ".join(entry['text'] for entry in data)
-                return text, transcript.language_code
-            except Exception:
+                transcript = transcript_list.find_transcript([lang])
+                transcript_data = transcript.fetch()
+                text = " ".join(entry.text for entry in transcript_data)
+                logger.info(f"Successfully fetched transcript in {lang}")
+                return text, lang
+            except:
                 continue
-
+        
+        # Try auto-generated transcripts
+        for transcript in available_transcripts:
+            try:
+                if transcript.is_generated:
+                    transcript_data = transcript.fetch()
+                    text = " ".join(entry.text for entry in transcript_data)
+                    lang = transcript.language_code[:2] if transcript.language_code else 'en'
+                    logger.info(f"Using auto-generated transcript in {transcript.language_code}")
+                    return text, lang
+            except Exception as e:
+                logger.error(f"Failed to fetch auto-generated transcript: {e}")
+                continue
+        
+        # Try any available transcript as last resort
+        for transcript in available_transcripts:
+            try:
+                transcript_data = transcript.fetch()
+                text = " ".join(entry.text for entry in transcript_data)
+                lang = transcript.language_code[:2] if transcript.language_code else 'en'
+                logger.info(f"Using transcript in {transcript.language_code}")
+                return text, lang
+            except Exception as e:
+                logger.error(f"Failed to fetch transcript in {transcript.language_code}: {e}")
+                continue
+                
+        return None, None
+        
+    except TranscriptsDisabled:
+        logger.error("Transcripts are disabled for this video")
+        return None, None
+    except NoTranscriptFound:
+        logger.error("No transcript found for this video")
         return None, None
     except Exception as e:
-        print(f"Transcript error: {e}")
+        logger.error(f"Unexpected error getting transcript: {e}")
         return None, None
-
 
 # Enhanced text-to-speech with better error handling and caching
 def generate_audio(text, voice_id='Joanna', speed=1.0, format='mp3'):
@@ -252,8 +288,8 @@ def generate_audio(text, voice_id='Joanna', speed=1.0, format='mp3'):
         polly = boto3.client(
             "polly",
             region_name="us-east-1",
-            aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"]            
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
         )
 
         response = polly.synthesize_speech(
