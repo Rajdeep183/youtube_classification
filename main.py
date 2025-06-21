@@ -22,7 +22,7 @@ import uuid
 
 # Load .env variables
 load_dotenv()
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -102,9 +102,13 @@ st.markdown("""
 # Enhanced sidebar for audio settings
 with st.sidebar:
     st.header("⚙️ Settings")
+    
+    # Audio Settings Section
     st.subheader("🎵 Audio Settings")
     enable_audio = st.checkbox("Enable Audio Responses", value=True)
+    
     if enable_audio:
+        # Voice selection
         voice_options = {
             'Joanna': 'Female US English (Joanna)',
             'Matthew': 'Male US English (Matthew)',
@@ -122,12 +126,28 @@ with st.sidebar:
             'Conchita': 'Female Spanish (Conchita)',
             'Enrique': 'Male Spanish (Enrique)'
         }
-        selected_voice = st.selectbox("Select Voice", options=list(voice_options.keys()), format_func=lambda x: voice_options[x])
+        
+        selected_voice = st.selectbox(
+            "Select Voice",
+            options=list(voice_options.keys()),
+            format_func=lambda x: voice_options[x],
+            index=0
+        )
+        
+        # Audio quality settings
         audio_speed = st.slider("Speech Speed", 0.5, 2.0, 1.0, 0.1)
-        max_chars_tts = st.slider("Max characters for TTS", 100, 2000, 800)
+        max_chars_tts = st.slider("Max characters for TTS", 100, 2000, 800, 
+                                 help="Limit text length for audio generation")
+        
+        # Auto-play option
         auto_play_audio = st.checkbox("Auto-play responses", value=False)
-        audio_format = "wav"
+        
+        # Audio format
+        audio_format = "wav"  # Force audio format to WAV only
+    
     st.divider()
+    st.subheader("🔧 Other Settings")
+
 video_url = st.text_input("📺 Paste YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
 
 # Session state initialization
@@ -249,61 +269,119 @@ def get_transcript(video_id):
         return None, None
 
 # Enhanced text-to-speech with better error handling and caching
-def generate_audio(text, voice_id='Joanna', speed=1.0):
+def generate_audio(text, voice_id='Joanna', speed=1.0, format='mp3'):
+    """Robust AWS Polly TTS with fallback conversion to WAV"""
     if not enable_audio or not text.strip():
         return None
+
     try:
+        # Truncate text
         if len(text) > max_chars_tts:
             text = text[:max_chars_tts] + "..."
-        cache_key = hashlib.md5(f"{text[:100]}{voice_id}{speed}".encode()).hexdigest()
+        cache_key = hashlib.md5(f"{text[:100]}{voice_id}{speed}{format}".encode()).hexdigest()
+
+        # Return cached audio if exists
         if cache_key in st.session_state.audio_cache:
             return st.session_state.audio_cache[cache_key]
 
+        # Polly client
         polly = boto3.client(
             "polly",
             region_name="us-east-1",
-            aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"]
-
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
         )
-        response = polly.synthesize_speech(Text=text, OutputFormat="mp3", VoiceId=voice_id)
-        mp3_bytes = response["AudioStream"].read()
 
-        # Convert to WAV via static FFmpeg
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            tmp.write(mp3_bytes)
-            mp3_path = tmp.name
-        wav_path = mp3_path.replace(".mp3", ".wav")
-        subprocess.run([FFMPEG_PATH, "-y", "-i", mp3_path, wav_path],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        with open(wav_path, "rb") as f:
-            wav_bytes = f.read()
-        st.session_state.audio_cache[cache_key] = wav_bytes
-        return wav_bytes
-    except Exception as e:
-        st.error("TTS generation/conversion failed—check FFmpeg path and logs.")
-        logger.error(str(e))
+        response = polly.synthesize_speech(
+            Text=text,
+            TextType='text',
+            OutputFormat="mp3",  # Polly only supports mp3, ogg_vorbis, pcm, json
+            VoiceId=voice_id
+        )
+
+        if "AudioStream" in response:
+            mp3_bytes = response["AudioStream"].read()
+
+            if audio_format == "wav":
+                # Convert MP3 to WAV using ffmpeg
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_file:
+                    mp3_file.write(mp3_bytes)
+                    mp3_path = mp3_file.name
+                
+                wav_path = mp3_path.replace(".mp3", ".wav")
+
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", mp3_path, wav_path],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=True
+                    )
+                    with open(wav_path, "rb") as wav_file:
+                        wav_bytes = wav_file.read()
+                    st.session_state.audio_cache[cache_key] = wav_bytes
+                    return wav_bytes
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"FFmpeg conversion failed: {e}")
+                    st.error("Audio conversion failed. Check ffmpeg installation.")
+                    return None
+
+            else:
+                # Default return MP3
+                st.session_state.audio_cache[cache_key] = mp3_bytes
+                return mp3_bytes
+
+        st.error("No audio stream returned from Polly.")
         return None
+
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        st.error(f"TTS generation failed: {e}")
+        return None
+
 def create_audio_player(text, response_id, voice_id='Joanna'):
+    """Create a custom audio player with controls and safe stream handling"""
     if not enable_audio:
         return
+
     col1, col2, col3 = st.columns([1, 3, 1])
+    
     with col1:
-        if st.button("🔊 Play", key=f"play_{response_id}"):
-            with st.spinner("Generating audio..."):
-                audio_bytes = generate_audio(text, voice_id, audio_speed)
+        if st.button(f"🔊 Play", key=f"play_{response_id}"):
+            with st.spinner("🎵 Generating audio..."):
+                audio_bytes = generate_audio(text, voice_id, audio_speed, audio_format)
                 if audio_bytes:
-                    st.session_state[f"audio_{response_id}"] = audio_bytes
+                    if len(audio_bytes) < 500:
+                        st.session_state[f"audio_{response_id}"] = None
+                        st.warning("⚠️ Audio is too short to play.")
+                    else:
+                        st.session_state[f"audio_{response_id}"] = audio_bytes
                     st.rerun()
+
     with col2:
-        st.success("🎵 Audio ready!") if st.session_state.get(f"audio_{response_id}") else st.info("Click play to generate")
+        # Show audio status
+        if st.session_state.get(f"audio_{response_id}"):
+            st.success("🎵 Audio ready!")
+        else:
+            st.info("Click play to generate audio")
+
     with col3:
-        if st.session_state.get(f"audio_{response_id}") and st.button("⏹️ Clear", key=f"clear_{response_id}"):
-            del st.session_state[f"audio_{response_id}"]; st.rerun()
+        if st.session_state.get(f"audio_{response_id}"):
+            if st.button(f"⏹️ Clear", key=f"clear_{response_id}"):
+                del st.session_state[f"audio_{response_id}"]
+                st.rerun()
+
+    # Display player if ready
     audio_bytes = st.session_state.get(f"audio_{response_id}")
     if audio_bytes:
-        st.audio(BytesIO(audio_bytes), format="audio/wav", autoplay=auto_play_audio)
-        st.download_button(f"📥 Download Audio (WAV)", audio_bytes, f"response_{response_id}.wav", mime="audio/wav")
+        st.audio(BytesIO(audio_bytes), format=f"audio/{audio_format}", autoplay=auto_play_audio)
+        st.download_button(
+            label=f"📥 Download Audio ({audio_format.upper()})",
+            data=audio_bytes,
+            file_name=f"response_{response_id}.{audio_format}",
+            mime=f"audio/{audio_format}",
+            key=f"download_{response_id}"
+        )
 
 
 # Helper: Process video with progress tracking
