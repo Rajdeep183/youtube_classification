@@ -22,7 +22,7 @@ import uuid
 
 # Load .env variables
 load_dotenv()
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -288,8 +288,8 @@ def generate_audio(text, voice_id='Joanna', speed=1.0, format='mp3'):
         polly = boto3.client(
             "polly",
             region_name="us-east-1",
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+            aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"]            
         )
 
         response = polly.synthesize_speech(
