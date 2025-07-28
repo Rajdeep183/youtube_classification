@@ -92,11 +92,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is open source and available under the [MIT License](LICENSE).
 
-## Author
-
-**Rajdeep Roy**
-- GitHub: [@Rajdeep183](https://github.com/Rajdeep183)
-- Project: [youtube_classification](https://github.com/Rajdeep183/youtube_classification)
 
 ## Acknowledgments
 
@@ -107,4 +102,4 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ---
 
-*Built with ❤️ by Rajdeep Roy*
+
